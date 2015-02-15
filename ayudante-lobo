@@ -1,0 +1,132 @@
+#!/usr/bin/env perl
+package Maff::Utility::AyudanteLobo;
+
+use strict;
+use warnings;
+
+# github:MaffC/maffpl.git provides the Maff:: namespace
+use Maff::Common::Conf qw/conf_load/;
+use Maff::Common::Net qw/scp_upload/;
+use Maff::Common::OSX qw/:all/;
+use Maff::Common::Time qw/timefmt2str/;
+
+use Cwd; use POSIX;
+use POE; use POE::Component::DirWatch::WithCaller;
+use Unix::PID;
+
+my $ME = "ayudante-lobo";
+my $VERSION = "0.9.1";
+my $HOSTNAME = `hostname`; chomp $HOSTNAME;
+
+#Expects that it will be launched either in an environment where $HOME is an exported env variable or that it will be launched by an initscript with the current working directory being the user's homedir.
+my $home = $ENV{HOME} || cwd();
+my $Conf = conf_load("$home/.${ME}rc") or logger(9,"Couldn't load .${ME}rc file in $home!");
+
+my $running = 0;
+my $sighup = 0;
+
+# Functions
+sub sigtrap {
+	my $sig = shift;
+	logger(2, "Caught SIG$sig: ".($sig eq 'HUP'? 'Restarting..' : 'Exiting..'));
+	$running = 0;
+	$sig eq 'HUP' and $sighup = 1;
+}
+sub logger {
+	my ($pri,$msg) = @_;
+	print timefmt2str('%e %B %T')." $HOSTNAME $ME\[$$] ($pri): $msg\n";
+	print STDERR timefmt2str('%e %B %T')." $HOSTNAME $ME\[$$] ($pri): $msg\n" if $pri =~ /^[29]$/;
+	notify($ME,$msg) if $pri == 3 and $Conf->{general}->{notify}->{on}->{error} == 1;
+	exit 0 if $pri == 8;
+	exit 1 if $pri == 9;
+	return $pri;
+}
+sub filter {
+	my ($sender_mon,$file) = @_;
+	return 0 if $file->is_dir;
+	return $file =~ /$Conf->{monitor}->{$sender_mon}->{match}->{regexp}/ if defined $Conf->{monitor}->{$sender_mon}->{match}->{regexp};
+	return 1 if defined $Conf->{monitor}->{$sender_mon}->{match}->{spotlight_meta} and qx(/usr/bin/mdls -name $Conf->{monitor}->{$sender_mon}->{match}->{spotlight_meta} "$file") =~ /^$Conf->{monitor}->{$sender_mon}->{match}->{spotlight_meta} = (?!\(null\)).*$/;
+	return 0;
+}
+sub trigger {
+	my ($sender_mon,$file) = @_;
+	logger(1,"sender: $sender_mon, file: $file");
+	$file->move_to("$home/.tmp/".name($sender_mon,$file->basename));
+	upload($file) or $file->move_to("$home/.tmp/.".$file->basename) and return if defined $Conf->{monitor}->{$sender_mon}->{action}->{upload} and $Conf->{monitor}->{$sender_mon}->{action}->{upload} == 1;
+	$file->move_to("$Conf->{monitor}->{$sender_mon}->{action}->{target}/".$file->basename) or logger(2,"Couldn't move ".$file->basename." to $Conf->{monitor}->{$sender_mon}->{action}->{target}") if defined $Conf->{monitor}->{$sender_mon}->{action}->{move} and $Conf->{monitor}->{$sender_mon}->{action}->{move} == 1 and defined $Conf->{monitor}->{$sender_mon}->{action}->{target};
+	$file->remove() if defined $Conf->{monitor}->{$sender_mon}->{action}->{delete} and $Conf->{monitor}->{$sender_mon}->{action}->{delete} == 1;
+}
+sub notify {
+	macintalk_say(text=>$_[($_[0] eq $ME)? 1 : 0]) if $Conf->{general}->{notify}->{macintalk} == 1;
+	nc_notify(@_) if $Conf->{general}->{notify}->{osxnotify} == 1;
+}
+sub name {
+	my ($sender_mon,$filename) = @_;
+	$Conf->{monitor}->{$sender_mon}->{action}->{rename} = 1 unless defined $Conf->{monitor}->{$sender_mon}->{action}->{rename};
+	return $filename if $Conf->{monitor}->{$sender_mon}->{action}->{rename} =~ /^0$/;
+	my $genfilename = timefmt2str($Conf->{general}->{filename});
+	return $genfilename."_$filename" if $Conf->{monitor}->{$sender_mon}->{action}->{rename} eq 'prepend';
+	$filename =~ s/(\.[a-z0-9]+)$//i and $genfilename .= $1;
+	return $filename."_$genfilename" if $Conf->{monitor}->{$sender_mon}->{action}->{rename} eq 'append';
+	return $genfilename;
+}
+sub upload {
+	my $file = shift;
+	notify("Uploading file","Uploading ".$file->basename." to $Conf->{upload}->{server}.") if $Conf->{general}->{notify}->{on}->{upload} == 1;
+	scp_upload(
+		file=>$file,
+		host=>$Conf->{upload}->{server},
+		port=>$Conf->{upload}->{port},
+		user=>$Conf->{upload}->{user},
+		key =>$Conf->{upload}->{sshkeypath},
+		path=>$Conf->{upload}->{remotepath}
+	) or logger(3,"Failed to upload ".$file->basename.". Error: $Maff::Common::Net::error") and return 0;
+	clipb_copy("http".(($Conf->{upload}->{pubssl}==1)? 's' : '')."://$Conf->{upload}->{pubdomain}/".($file->basename =~ s/ /%20/r));
+	notify("File uploaded",$file->basename." uploaded to $Conf->{upload}->{server}.") if $Conf->{general}->{notify}->{on}->{upload} == 1;
+	return 1;
+}
+
+# Main
+logger(9,"At least one monitor must be defined in ~/.${ME}rc.") unless scalar keys %{$Conf->{monitor}};
+POE::Kernel->run();
+$Conf->{general}->{pidfile} = "$home/.$ME.pid" unless defined $Conf->{general}->{pidfile} and length $Conf->{general}->{pidfile};
+$Conf->{general}->{storelogs} = 1 unless defined $Conf->{general}->{storelogs};
+$Conf->{general}->{logfile} = "$home/.$ME.log" unless defined $Conf->{general}->{logfile} and length $Conf->{general}->{logfile};
+$Conf->{general}->{errlogfile} = "$home/.$ME.err" unless defined $Conf->{general}->{errlogfile} and length $Conf->{general}->{errlogfile};
+my $pid = Unix::PID->new()->is_pidfile_running($Conf->{general}->{pidfile}) || 0;
+kill 'HUP', $pid and logger(8, "$ME already running, restarting.") if $pid != $$ and $pid > 0;
+Unix::PID->new()->pid_file($Conf->{general}->{pidfile}) or logger(9, "Failed to write PID to $Conf->{general}->{pidfile}");
+if($Conf->{general}->{storelogs}) {
+	open(STDOUT, ">>$Conf->{general}->{logfile}");
+	open(STDERR, ">>$Conf->{general}->{errlogfile}");
+	select((select(STDOUT), $|=1)[0]);
+}
+logger(1,"Starting $ME..");
+
+$running = 1;
+
+$SIG{HUP} = \&sigtrap;
+$SIG{INT} = \&sigtrap;
+$SIG{QUIT} = \&sigtrap;
+$SIG{TERM} = \&sigtrap;
+
+POE::Session->create( inline_states => { _start => sub {
+	foreach our $monitor (keys %{$Conf->{monitor}}) {
+		next if defined $Conf->{monitor}->{$monitor}->{disable} and $Conf->{monitor}->{$monitor}->{disable} == 1;
+		$Conf->{monitor}->{$monitor}->{poll} = 5 unless defined $Conf->{monitor}->{$monitor}->{poll};
+		$Conf->{monitor}->{$monitor}->{ignoreseen} = 0 unless defined $Conf->{monitor}->{$monitor}->{ignoreseen};
+		$_[HEAP]->{$monitor} = POE::Component::DirWatch::WithCaller->new(
+			alias			=> $monitor,
+			directory		=> $Conf->{monitor}->{$monitor}->{dir},
+			filter			=> \&filter,
+			file_callback	=> \&trigger,
+			interval		=> $Conf->{monitor}->{$monitor}->{poll},
+			ignore_seen		=> $Conf->{monitor}->{$monitor}->{ignoreseen},
+			ensure_seen		=> $Conf->{monitor}->{$monitor}->{ignoreseen},
+		);
+	}
+}});
+logger(1, "$ME version $VERSION started.");
+POE::Kernel->run_while(\$running);
+logger($sighup? 1 : 8,"Halting $ME..");
+exec $^X, $0, @ARGV;
