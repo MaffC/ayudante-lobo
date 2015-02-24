@@ -2,28 +2,44 @@
 package Maff::Utility::AyudanteLobo;
 
 use strict;
-use warnings;
-
-# github:MaffC/maffpl.git provides the Maff:: namespace
-use Maff::Common::Conf qw/conf_load/;
-use Maff::Common::Net qw/scp_upload/;
-use Maff::Common::OSX qw/:all/;
-use Maff::Common::Time qw/timefmt2str/;
 
 use Cwd; use POSIX;
+use Date::Format qw/time2str/;
+use Net::SSH2; use Try::Tiny;
 use POE; use POE::Component::DirWatch::WithCaller;
-use Unix::PID;
+use Unix::PID; use YAML;
+
+use Maff::Common::OSX qw/:all/;
 
 my $ME = "ayudante-lobo";
-my $VERSION = "0.9.1";
+my $VERSION = "0.9.2";
 my $HOSTNAME = `hostname`; chomp $HOSTNAME;
 
 #Expects that it will be launched either in an environment where $HOME is an exported env variable or that it will be launched by an initscript with the current working directory being the user's homedir.
 my $home = $ENV{HOME} || cwd();
-my $Conf = conf_load("$home/.${ME}rc") or logger(9,"Couldn't load .${ME}rc file in $home!");
+my $Conf = YAML::LoadFile("$home/.${ME}rc") or logger(9,"Couldn't load .${ME}rc file in $home!");
 
 my $running = 0;
 my $sighup = 0;
+
+# Functions included from github:MaffC/maffpl to reduce dependencies on non-CPAN modules
+sub scp_upload {
+	my $file = shift; my $ssh = Net::SSH2->new();
+	try {
+		$ssh->connect($Conf->{upload}->{server},$Conf->{upload}->{port},Timeout => 3);
+	} catch {
+		logger(2,"SSH connection failed (exception): $_") and return 0;
+	};
+	logger(2,"SSH connection failed (error): $ssh->error") and return 0 if $ssh->error;
+	$ssh->auth_publickey($Conf->{upload}->{user},$Conf->{upload}->{sshkeypath}.'.pub',$Conf->{upload}->{sshkeypath});
+	logger(2,"SSH connection failed (auth error): $ssh->error") and return 0 unless $ssh->auth_ok;
+	$Conf->{upload}->{remotepath} .= "/" unless $Conf->{upload}->{remotepath} =~ /\/$/;
+	logger(2,"File upload failed: $ssh->error") and return 0 unless $ssh->scp_put("$file",$Conf->{upload}->{remotepath}.$file->basename);
+	$ssh->disconnect; return 1;
+}
+sub timefmt2str {
+	return Date::Format::time2str(shift,time());
+}
 
 # Functions
 sub sigtrap {
@@ -87,6 +103,7 @@ sub upload {
 }
 
 # Main
+#TODO: error out if monitors are defined but none are enabled
 logger(9,"At least one monitor must be defined in ~/.${ME}rc.") unless scalar keys %{$Conf->{monitor}};
 POE::Kernel->run();
 $Conf->{general}->{pidfile} = "$home/.$ME.pid" unless defined $Conf->{general}->{pidfile} and length $Conf->{general}->{pidfile};
