@@ -24,7 +24,7 @@ my $sighup = 0;
 
 # Functions included from github:MaffC/maffpl to reduce dependencies on non-CPAN modules
 sub scp_upload {
-	my $file = shift; my $fbn = $file->basename; my $ssh = Net::SSH2->new();
+	my $file = shift; my $ssh = Net::SSH2->new();
 	try {
 		$ssh->connect($Conf->{upload}->{server},$Conf->{upload}->{port},Timeout => 3);
 	} catch {
@@ -34,7 +34,7 @@ sub scp_upload {
 	$ssh->auth_publickey($Conf->{upload}->{user},$Conf->{upload}->{sshkeypath}.'.pub',$Conf->{upload}->{sshkeypath});
 	logger(2,"SSH connection failed (auth error): $ssh->error") and return 0 unless $ssh->auth_ok;
 	$Conf->{upload}->{remotepath} .= "/" unless $Conf->{upload}->{remotepath} =~ /\/$/;
-	logger(2,"File upload failed: $ssh->error") and return 0 unless $ssh->scp_put("$file",$Conf->{upload}->{remotepath}.$fbn);
+	logger(2,"File upload failed: $ssh->error") and return 0 unless $ssh->scp_put("$file",$Conf->{upload}->{remotepath}.$file->basename);
 	$ssh->disconnect; return 1;
 }
 sub timefmt2str {
@@ -89,14 +89,7 @@ sub name {
 sub upload {
 	my $file = shift;
 	notify("Uploading file","Uploading ".$file->basename." to $Conf->{upload}->{server}.") if $Conf->{general}->{notify}->{on}->{upload} == 1;
-	scp_upload(
-		file=>$file,
-		host=>$Conf->{upload}->{server},
-		port=>$Conf->{upload}->{port},
-		user=>$Conf->{upload}->{user},
-		key =>$Conf->{upload}->{sshkeypath},
-		path=>$Conf->{upload}->{remotepath}
-	) or logger(3,"Failed to upload ".$file->basename.".") and return 0;
+	scp_upload($file) or logger(3,"Failed to upload ".$file->basename.".") and return 0;
 	clipb_copy("http".(($Conf->{upload}->{pubssl}==1)? 's' : '')."://$Conf->{upload}->{pubdomain}/".($file->basename =~ s/ /%20/r));
 	notify("File uploaded",$file->basename." uploaded to $Conf->{upload}->{server}.") if $Conf->{general}->{notify}->{on}->{upload} == 1;
 	return 1;
