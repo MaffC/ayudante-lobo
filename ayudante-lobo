@@ -12,7 +12,7 @@ use Unix::PID; use YAML;
 use Maff::Common::OSX qw/:all/;
 
 my $ME = "ayudante-lobo";
-my $VERSION = "0.9.2";
+my $VERSION = "0.9.3";
 my $HOSTNAME = `hostname`; chomp $HOSTNAME;
 
 #Expects that it will be launched either in an environment where $HOME is an exported env variable or that it will be launched by an initscript with the current working directory being the user's homedir.
