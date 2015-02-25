@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 package Maff::Utility::AyudanteLobo;
 
 use strict;
