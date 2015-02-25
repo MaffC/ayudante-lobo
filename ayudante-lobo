@@ -96,7 +96,7 @@ sub upload {
 		user=>$Conf->{upload}->{user},
 		key =>$Conf->{upload}->{sshkeypath},
 		path=>$Conf->{upload}->{remotepath}
-	) or logger(3,"Failed to upload ".$file->basename.". Error: $Maff::Common::Net::error") and return 0;
+	) or logger(3,"Failed to upload ".$file->basename.".") and return 0;
 	clipb_copy("http".(($Conf->{upload}->{pubssl}==1)? 's' : '')."://$Conf->{upload}->{pubdomain}/".($file->basename =~ s/ /%20/r));
 	notify("File uploaded",$file->basename." uploaded to $Conf->{upload}->{server}.") if $Conf->{general}->{notify}->{on}->{upload} == 1;
 	return 1;
