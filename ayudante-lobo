@@ -15,9 +15,7 @@ my $ME = "ayudante-lobo";
 my $VERSION = "0.9.3";
 my $HOSTNAME = `hostname`; chomp $HOSTNAME;
 
-#Expects that it will be launched either in an environment where $HOME is an exported env variable or that it will be launched by an initscript with the current working directory being the user's homedir.
-my $home = $ENV{HOME} || cwd();
-my $Conf = YAML::LoadFile("$home/.${ME}rc") or logger(9,"Couldn't load .${ME}rc file in $home!");
+my ($base, $Conf);
 
 my $running = 0;
 my $sighup = 0;
@@ -42,6 +40,71 @@ sub timefmt2str {
 }
 
 # Functions
+sub init {
+	#Expects that it will be launched either in an environment where $HOME is an exported env variable or that it will be launched by an initscript with the current working directory being the user's homedir. conf file location can be manually set by passing it in the LOBORC env variable.
+	$base = $ENV{HOME} || cwd();
+	my $confp = $ENV{LOBORC} || "$base/.${ME}rc";
+	my $loaded = (-e $confp and -f $confp and -r $confp and not -z $confp)? init_conf($confp) : -1;
+	if ($Conf->{general}->{storelogs} or not $loaded) {
+		open(STDOUT, ">>".$Conf->{general}->{logfile}) if length $Conf->{general}->{logfile};
+		open(STDERR, ">>".$Conf->{general}->{errlogfile}) if length $Conf->{general}->{errlogfile};
+		select((select(STDOUT), $|=1)[0]);
+	}
+	$loaded == 0 and logger(9,"Configuration file at $confp exists but could not be loaded. Please check it is fully-valid YAML.");
+	$loaded == -1 and logger(9,"Configuration file at $confp either doesn't exist or is unreadable/empty.");
+	$loaded == -2 and logger(9,"Configuration file at $confp loaded but did not contain any enabled monitors.");
+	$loaded == -3 and logger(9,"Configuration file at $confp loaded but was missing a required configuration parameter.");
+	#then we run the kernel once, I forget why
+	POE::Kernel->run();
+	#at this point the config file should be /pretty/ kawaii, so we start initialising
+	my $pid = Unix::PID->new()->is_pidfile_running($Conf->{general}->{pidfile}) || 0;
+	kill 'HUP', $pid and logger(8, "$ME already running, restarting.") if $pid != $$ and $pid > 0;
+	Unix::PID->new()->pid_file($Conf->{general}->{pidfile}) or logger(9, "Failed to write PID to $Conf->{general}->{pidfile}");
+	#indicate we should start
+	logger(1,"Starting $ME..");
+	$running = 1;
+	#set up signal handlers so we can handle SIGHUPs and handle quitting gracefully.
+	$SIG{HUP} = \&sigtrap;
+	$SIG{INT} = \&sigtrap;
+	$SIG{QUIT} = \&sigtrap;
+	$SIG{TERM} = \&sigtrap;
+	#then we initialise monitors
+	init_mons();
+	logger(1, "$ME version $VERSION started.");
+}
+sub init_conf {
+	$Conf = YAML::LoadFile($_) or return 0;
+	$base = $Conf->{general}->{home} if defined $Conf->{general}->{home} and length $Conf->{general}->{home};
+	return -3 unless defined $Conf->{general}->{tmp} and length $Conf->{general}->{tmp};
+	$Conf->{general}->{tmp} .= '/' unless $Conf->{general}->{tmp} =~ /\/$/;
+	$Conf->{general}->{storelogs} = 1 unless defined $Conf->{general}->{storelogs} and $Conf->{general}->{storelogs} =~ /^[01]$/;
+	$Conf->{general}->{pidfile} = "$base/.$ME.pid" unless exists $Conf->{general}->{pidfile};
+	$Conf->{general}->{logfile} = "$base/.$ME.log" unless exists $Conf->{general}->{logfile};
+	$Conf->{general}->{errlogfile} = "$base/.$ME.err" unless defined $Conf->{general}->{errlogfile} and length $Conf->{general}->{errlogfile};
+	$Conf->{general}->{storelogs} = 0 unless length $Conf->{general}->{logfile} or length $Conf->{general}->{errlogfile};
+	return -2 unless scalar keys %{$Conf->{monitor}};
+	my $c;
+	for my $monitor (keys %{$Conf->{monitor}}) { $c++ unless defined $Conf->{monitor}->{$monitor}->{disable} and $Conf->{monitor}->{$monitor}->{disable} == 1; }
+	return -2 unless $c;
+}
+sub init_mons {
+	POE::Session->create( inline_states => { _start => sub {
+		foreach our $monitor (keys %{$Conf->{monitor}}) {
+			next if defined $Conf->{monitor}->{$monitor}->{disable} and $Conf->{monitor}->{$monitor}->{disable} == 1;
+			$Conf->{monitor}->{$monitor}->{poll} = 5 unless defined $Conf->{monitor}->{$monitor}->{poll};
+			$Conf->{monitor}->{$monitor}->{ignoreseen} = 0 unless defined $Conf->{monitor}->{$monitor}->{ignoreseen};
+			$_[HEAP]->{$monitor} = POE::Component::DirWatch::WithCaller->new(
+				alias			=> $monitor,
+				directory		=> $Conf->{monitor}->{$monitor}->{dir},
+				filter			=> \&filter,
+				file_callback	=> \&trigger,
+				interval		=> $Conf->{monitor}->{$monitor}->{poll},
+				ignore_seen		=> $Conf->{monitor}->{$monitor}->{ignoreseen},
+				ensure_seen		=> $Conf->{monitor}->{$monitor}->{ignoreseen},
+			);
+		}
+	}});
+}
 sub sigtrap {
 	my $sig = shift;
 	logger(2, "Caught SIG$sig: ".($sig eq 'HUP'? 'Restarting..' : 'Exiting..'));
@@ -57,6 +120,8 @@ sub logger {
 	exit 1 if $pri == 9;
 	return $pri;
 }
+
+# Monitor-specific subroutines.
 sub filter {
 	my ($sender_mon,$file) = @_;
 	return 0 if $file->is_dir;
@@ -67,8 +132,8 @@ sub filter {
 sub trigger {
 	my ($sender_mon,$file) = @_;
 	logger(1,"sender: $sender_mon, file: $file");
-	$file->move_to("$home/.tmp/".name($sender_mon,$file->basename));
-	upload($file) or $file->move_to("$home/.tmp/.".$file->basename) and return if defined $Conf->{monitor}->{$sender_mon}->{action}->{upload} and $Conf->{monitor}->{$sender_mon}->{action}->{upload} == 1;
+	$file->move_to($Conf->{general}->{tmp}.name($sender_mon,$file->basename));
+	upload($file) or $file->move_to($Conf->{general}->{tmp}.$file->basename) and return if defined $Conf->{monitor}->{$sender_mon}->{action}->{upload} and $Conf->{monitor}->{$sender_mon}->{action}->{upload} == 1;
 	$file->move_to("$Conf->{monitor}->{$sender_mon}->{action}->{target}/".$file->basename) or logger(2,"Couldn't move ".$file->basename." to $Conf->{monitor}->{$sender_mon}->{action}->{target}") if defined $Conf->{monitor}->{$sender_mon}->{action}->{move} and $Conf->{monitor}->{$sender_mon}->{action}->{move} == 1 and defined $Conf->{monitor}->{$sender_mon}->{action}->{target};
 	$file->remove() if defined $Conf->{monitor}->{$sender_mon}->{action}->{delete} and $Conf->{monitor}->{$sender_mon}->{action}->{delete} == 1;
 }
@@ -96,47 +161,7 @@ sub upload {
 }
 
 # Main
-#TODO: error out if monitors are defined but none are enabled
-logger(9,"At least one monitor must be defined in ~/.${ME}rc.") unless scalar keys %{$Conf->{monitor}};
-POE::Kernel->run();
-$Conf->{general}->{pidfile} = "$home/.$ME.pid" unless defined $Conf->{general}->{pidfile} and length $Conf->{general}->{pidfile};
-$Conf->{general}->{storelogs} = 1 unless defined $Conf->{general}->{storelogs};
-$Conf->{general}->{logfile} = "$home/.$ME.log" unless defined $Conf->{general}->{logfile} and length $Conf->{general}->{logfile};
-$Conf->{general}->{errlogfile} = "$home/.$ME.err" unless defined $Conf->{general}->{errlogfile} and length $Conf->{general}->{errlogfile};
-my $pid = Unix::PID->new()->is_pidfile_running($Conf->{general}->{pidfile}) || 0;
-kill 'HUP', $pid and logger(8, "$ME already running, restarting.") if $pid != $$ and $pid > 0;
-Unix::PID->new()->pid_file($Conf->{general}->{pidfile}) or logger(9, "Failed to write PID to $Conf->{general}->{pidfile}");
-if($Conf->{general}->{storelogs}) {
-	open(STDOUT, ">>$Conf->{general}->{logfile}");
-	open(STDERR, ">>$Conf->{general}->{errlogfile}");
-	select((select(STDOUT), $|=1)[0]);
-}
-logger(1,"Starting $ME..");
-
-$running = 1;
-
-$SIG{HUP} = \&sigtrap;
-$SIG{INT} = \&sigtrap;
-$SIG{QUIT} = \&sigtrap;
-$SIG{TERM} = \&sigtrap;
-
-POE::Session->create( inline_states => { _start => sub {
-	foreach our $monitor (keys %{$Conf->{monitor}}) {
-		next if defined $Conf->{monitor}->{$monitor}->{disable} and $Conf->{monitor}->{$monitor}->{disable} == 1;
-		$Conf->{monitor}->{$monitor}->{poll} = 5 unless defined $Conf->{monitor}->{$monitor}->{poll};
-		$Conf->{monitor}->{$monitor}->{ignoreseen} = 0 unless defined $Conf->{monitor}->{$monitor}->{ignoreseen};
-		$_[HEAP]->{$monitor} = POE::Component::DirWatch::WithCaller->new(
-			alias			=> $monitor,
-			directory		=> $Conf->{monitor}->{$monitor}->{dir},
-			filter			=> \&filter,
-			file_callback	=> \&trigger,
-			interval		=> $Conf->{monitor}->{$monitor}->{poll},
-			ignore_seen		=> $Conf->{monitor}->{$monitor}->{ignoreseen},
-			ensure_seen		=> $Conf->{monitor}->{$monitor}->{ignoreseen},
-		);
-	}
-}});
-logger(1, "$ME version $VERSION started.");
+init();
 POE::Kernel->run_while(\$running);
 logger($sighup? 1 : 8,"Halting $ME..");
 exec $^X, $0, @ARGV;

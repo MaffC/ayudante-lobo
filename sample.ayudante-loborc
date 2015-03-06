@@ -43,11 +43,15 @@ monitor:
       delete: 1
 
 # general configuration, basically self-documenting
-
+# general->home is optional. if empty, this will be determined by the $HOME env variable or the current working directory.
+# general->errlogfile and logfile will default to $home/.ayudante-lobo.err and .log if removed, leaving them blank will instead disable logging for either standard logs or error logs. if both are left blank, storelogs will internally be set to 0 at runtime.
+# general->tmp is required.
 general:
+  home:
+  tmp: /var/tmp
   filename: %Y-%m-%d_%H.%M.%S
-  storelogs: 1
   pidfile:
+  storelogs: 1
   logfile:
   errlogfile:
   notify:
