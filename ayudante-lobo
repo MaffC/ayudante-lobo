@@ -12,7 +12,7 @@ use Unix::PID; use YAML;
 use Maff::Common::OSX qw/:all/;
 
 my $ME = "ayudante-lobo";
-my $VERSION = "0.9.3";
+my $VERSION = "0.9.4";
 my $HOSTNAME = `hostname`; chomp $HOSTNAME;
 
 my ($base, $Conf);
