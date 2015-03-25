@@ -139,7 +139,7 @@ sub trigger {
 	$file->remove() if defined $Conf->{monitor}->{$sender_mon}->{action}->{delete} and $Conf->{monitor}->{$sender_mon}->{action}->{delete} == 1;
 }
 sub notify {
-	macintalk_say(text=>$_[($_[0] eq $ME)? 1 : 0]) if $Conf->{general}->{notify}->{macintalk} == 1;
+	macintalk_say(text=>$_[($_[0] eq $ME)? 1 : 0], voice=>(length $Conf->{general}->{notify}->{macintalk_voice}? $Conf->{general}->{notify}->{macintalk_voice} : "Daniel")) if $Conf->{general}->{notify}->{macintalk} == 1;
 	nc_notify(@_) if $Conf->{general}->{notify}->{osxnotify} == 1;
 }
 sub name {
