@@ -60,4 +60,5 @@ general:
       error: 0
     macintalk: 1
     macintalk_voice: Daniel
+    macintalk_rate: 190
     osxnotify: 1
