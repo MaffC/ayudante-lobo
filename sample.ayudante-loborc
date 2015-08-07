@@ -58,7 +58,6 @@ general:
     on:
       upload: 1
       error: 0
-    macintalk: 1
-    macintalk_voice: Daniel
-    macintalk_rate: 190
-    osxnotify: 1
+    speech: 1
+    speech_voice: Daniel
+    banner: 1

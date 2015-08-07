@@ -9,10 +9,14 @@ use Net::SSH2; use Try::Tiny;
 use POE; use POE::Component::DirWatch::WithCaller;
 use Unix::PID; use YAML;
 
-use Maff::Common::OSX qw/:all/;
+use Speech::Synthesis;
+
+require Win32::Clipboard if $^O eq 'MSWin32';
+require Mac::Pasteboard if $^O eq 'darwin';
+
 
 my $ME = "ayudante-lobo";
-my $VERSION = "0.9.6";
+my $VERSION = "0.9.9";
 my $HOSTNAME = `hostname`; chomp $HOSTNAME;
 
 my ($base, $Conf);
@@ -20,29 +24,72 @@ my ($base, $Conf);
 my $running = 0;
 my $sighup = 0;
 
-# Functions included from github:MaffC/maffpl to reduce dependencies on non-CPAN modules
 sub scp_upload {
 	my $file = shift; my $ssh = Net::SSH2->new();
 	try {
-		$ssh->connect($Conf->{upload}->{server},$Conf->{upload}->{port},Timeout => 3);
+		$ssh->connect($Conf->{'upload'}->{server},$Conf->{'upload'}->{port},Timeout => 3);
 	} catch {
 		logger(2,"SSH connection failed (exception): $_") and return 0;
 	};
 	logger(2,"SSH connection failed (error): $ssh->error") and return 0 if $ssh->error;
-	$ssh->auth_publickey($Conf->{upload}->{user},$Conf->{upload}->{sshkeypath}.'.pub',$Conf->{upload}->{sshkeypath});
+	$ssh->auth_publickey($Conf->{'upload'}->{user},$Conf->{'upload'}->{sshkeypath}.'.pub',$Conf->{'upload'}->{sshkeypath});
 	logger(2,"SSH connection failed (auth error): $ssh->error") and return 0 unless $ssh->auth_ok;
-	$Conf->{upload}->{remotepath} .= "/" unless $Conf->{upload}->{remotepath} =~ /\/$/;
-	logger(2,"File upload failed: $ssh->error") and return 0 unless $ssh->scp_put("$file",$Conf->{upload}->{remotepath}.$file->basename);
+	$Conf->{'upload'}->{remotepath} .= "/" unless $Conf->{'upload'}->{remotepath} =~ /\/$/;
+	logger(2,"File upload failed: $ssh->error") and return 0 unless $ssh->scp_put("$file",$Conf->{'upload'}->{remotepath}.$file->basename);
 	$ssh->disconnect; return 1;
 }
 sub timefmt2str {
 	return Date::Format::time2str(shift,time());
+}
+sub clipb_copy_w32 {
+	my $t = shift;
+	my $p = Win32::Clipboard();
+	$p->Set($t);
+}
+sub clipb_copy_osx {
+	my $t = shift;
+	my $p = Mac::Pasteboard->new();
+	$p->copy($t);
+	$p->copy($t, "public.utf8-plain-text");
+	$p->copy($t, "public.utf16-plain-text");
+	$p->copy($t, "public.utf16-external-plain-text");
+}
+sub clipb_copy {
+	clipb_copy_w32(@_) if $^O eq 'MSWin32';
+	clipb_copy_osx(@_) if $^O eq 'darwin';
+}
+sub banner_w32 {
+	my ($title,$text) = @_;
+	system("C:/Users/Maff/Documents/Other/toast.exe \"$title\" \"$text\" \"\"");
+}
+sub banner_osx {
+	my ($title,$text) = @_;
+	system("/usr/bin/osascript -e 'display notification \"$text\" with title \"$title\"' &");
+}
+sub banner {
+	banner_w32(@_) if $^O eq 'MSWin32';
+	banner_osx(@_) if $^O eq 'darwin';
+}
+sub speak {
+	my $t=shift;
+	my %args=(
+		engine	=> '',
+		voice		=> ''
+	);
+	$args{engine}='SAPI5' if $^O eq 'MSWin32';
+	$args{engine}='MacSpeech' if $^O eq 'darwin';
+	$args{voice}=$Conf->{general}->{'notify'}->{speech_voice} if length $Conf->{general}->{'notify'}->{speech_voice};
+	my $synth=Speech::Synthesis->new(%args);
+	$synth->speak($t);
 }
 
 # Functions
 sub init {
 	#Expects that it will be launched either in an environment where $HOME is an exported env variable or that it will be launched by an initscript with the current working directory being the user's homedir. conf file location can be manually set by passing it in the LOBORC env variable.
 	$base = $ENV{HOME} || cwd();
+	$base = $ENV{HOMEDRIVE}.$ENV{HOMEPATH} if $^O eq 'MSWin32';
+	$base =~ s/\\/\//g if $^O eq 'MSWin32';
+	chdir $base;
 	my $confp = $ENV{LOBORC} || "$base/.${ME}rc"; my $loaded = 0;
 	$loaded = init_conf($confp) if -e $confp and -f $confp and -r $confp and not -z $confp;
 	if ($Conf->{general}->{storelogs} or not $loaded) {
@@ -116,7 +163,7 @@ sub logger {
 	my ($pri,$msg) = @_;
 	print timefmt2str('%e %B %T')." $HOSTNAME $ME\[$$] ($pri): $msg\n" unless $pri =~ /^[29]$/;
 	print STDERR timefmt2str('%e %B %T')." $HOSTNAME $ME\[$$] ($pri): $msg\n" if $pri =~ /^[29]$/;
-	notify($ME,$msg) if $pri == 3 and $Conf->{general}->{notify}->{on}->{error} == 1;
+	notify($ME,$msg) if $pri == 3 and $Conf->{general}->{'notify'}->{on}->{error} == 1;
 	exit 0 if $pri == 8;
 	exit 1 if $pri == 9;
 	return $pri;
@@ -134,16 +181,13 @@ sub trigger {
 	my ($sender_mon,$file) = @_;
 	logger(1,"sender: $sender_mon, file: $file");
 	$file->move_to($Conf->{general}->{tmp}.name($sender_mon,$file->basename));
-	upload($file) or $file->move_to($Conf->{general}->{tmp}.$file->basename) and return if defined $Conf->{monitor}->{$sender_mon}->{action}->{upload} and $Conf->{monitor}->{$sender_mon}->{action}->{upload} == 1;
+	upload($file) or $file->move_to($Conf->{general}->{tmp}.$file->basename) and return if defined $Conf->{monitor}->{$sender_mon}->{action}->{'upload'} and $Conf->{monitor}->{$sender_mon}->{action}->{'upload'} == 1;
 	$file->move_to("$Conf->{monitor}->{$sender_mon}->{action}->{target}/".$file->basename) or logger(2,"Couldn't move ".$file->basename." to $Conf->{monitor}->{$sender_mon}->{action}->{target}") if defined $Conf->{monitor}->{$sender_mon}->{action}->{move} and $Conf->{monitor}->{$sender_mon}->{action}->{move} == 1 and defined $Conf->{monitor}->{$sender_mon}->{action}->{target};
 	$file->remove() if defined $Conf->{monitor}->{$sender_mon}->{action}->{delete} and $Conf->{monitor}->{$sender_mon}->{action}->{delete} == 1;
 }
 sub notify {
-	my %macintalk_args = (text => $_[($_[0] eq $ME)? 1 : 0],);
-	$macintalk_args{voice} = $Conf->{general}->{notify}->{macintalk_voice} if length $Conf->{general}->{notify}->{macintalk_voice};
-	$macintalk_args{rate} = $Conf->{general}->{notify}->{macintalk_rate} if $Conf->{general}->{notify}->{macintalk_rate} > 120;
-	macintalk_say(%macintalk_args) if $Conf->{general}->{notify}->{macintalk} == 1;
-	nc_notify(@_) if $Conf->{general}->{notify}->{osxnotify} == 1;
+	banner(@_) if $Conf->{general}->{'notify'}->{'banner'} == 1;
+	speak($_[($_[0] eq $ME)? 1 : 0]) if $Conf->{general}->{'notify'}->{speech} == 1;
 }
 sub name {
 	my ($sender_mon,$filename) = @_;
@@ -157,10 +201,10 @@ sub name {
 }
 sub upload {
 	my $file = shift;
-	notify("Uploading file","Uploading ".$file->basename." to $Conf->{upload}->{server}.") if $Conf->{general}->{notify}->{on}->{upload} == 1;
+	notify("Uploading file","Uploading ".$file->basename." to ".$Conf->{'upload'}->{server}.".") if $Conf->{general}->{'notify'}->{on}->{'upload'} == 1;
 	scp_upload($file) or logger(3,"Failed to upload ".$file->basename.".") and return 0;
-	clipb_copy("http".(($Conf->{upload}->{pubssl}==1)? 's' : '')."://$Conf->{upload}->{pubdomain}/".($file->basename =~ s/ /%20/r));
-	notify("File uploaded",$file->basename." uploaded to $Conf->{upload}->{server}.") if $Conf->{general}->{notify}->{on}->{upload} == 1;
+	clipb_copy("http".(($Conf->{'upload'}->{pubssl}==1)? 's' : '')."://".$Conf->{'upload'}->{pubdomain}."/".($file->basename =~ s/ /%20/r));
+	notify("File uploaded",$file->basename." uploaded to ".$Conf->{'upload'}->{server}.".") if $Conf->{general}->{'notify'}->{on}->{'upload'} == 1;
 	return 1;
 }
 
