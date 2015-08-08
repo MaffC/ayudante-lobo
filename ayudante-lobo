@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-package Maff::Utility::AyudanteLobo;
+package App::AyudanteLobo;
 
 use strict;
 
@@ -9,6 +9,7 @@ use Net::SSH2; use Try::Tiny;
 use POE; use POE::Component::DirWatch::WithCaller;
 use Unix::PID; use YAML;
 
+#thank you cpan-senpai
 use Speech::Synthesis;
 
 require Win32::Clipboard if $^O eq 'MSWin32';
@@ -16,7 +17,8 @@ require Mac::Pasteboard if $^O eq 'darwin';
 
 
 my $ME = "ayudante-lobo";
-my $VERSION = "0.9.9";
+#will bump to 1.0 once i'm satisfied with notif banner methods & xplat compat
+my $VERSION = "0.10";
 my $HOSTNAME = `hostname`; chomp $HOSTNAME;
 
 my ($base, $Conf);
@@ -43,8 +45,8 @@ sub timefmt2str {
 }
 sub clipb_copy_w32 {
 	my $t = shift;
-	my $p = Win32::Clipboard();
-	$p->Set($t);
+	Win32::Clipboard::Empty();
+	Win32::Clipboard::Set($t);
 }
 sub clipb_copy_osx {
 	my $t = shift;
@@ -60,10 +62,12 @@ sub clipb_copy {
 }
 sub banner_w32 {
 	my ($title,$text) = @_;
+	#TODO either figure out how to do toasts without a shim, or make this less ghetto
 	system("C:/Users/Maff/Documents/Other/toast.exe \"$title\" \"$text\" \"\"");
 }
 sub banner_osx {
 	my ($title,$text) = @_;
+	#TODO ditto as above, osascript isn't a shim per-se but it's still ghetto
 	system("/usr/bin/osascript -e 'display notification \"$text\" with title \"$title\"' &");
 }
 sub banner {
@@ -85,10 +89,11 @@ sub speak {
 
 # Functions
 sub init {
-	#Expects that it will be launched either in an environment where $HOME is an exported env variable or that it will be launched by an initscript with the current working directory being the user's homedir. conf file location can be manually set by passing it in the LOBORC env variable.
+	#if $HOME ('nix) or $HOMEDRIVE/$HOMEPATH (win32) exist, use those for our basedir, else use cwd
 	$base = $ENV{HOME} || cwd();
 	$base = $ENV{HOMEDRIVE}.$ENV{HOMEPATH} if $^O eq 'MSWin32';
 	$base =~ s/\\/\//g if $^O eq 'MSWin32';
+	#chdir to avoid fucking up relative paths when launched outside of $base
 	chdir $base;
 	my $confp = $ENV{LOBORC} || "$base/.${ME}rc"; my $loaded = 0;
 	$loaded = init_conf($confp) if -e $confp and -f $confp and -r $confp and not -z $confp;
@@ -212,4 +217,5 @@ sub upload {
 init();
 POE::Kernel->run_while(\$running);
 logger($sighup? 1 : 8,"Halting $ME..");
+#TODO figure out why SIGHUP on windows doesn't actually let lobo restart.
 exec $^X, $0, @ARGV;
