@@ -33,11 +33,11 @@ sub scp_upload {
 	} catch {
 		logger(2,"SSH connection failed (exception): $_") and return 0;
 	};
-	logger(2,"SSH connection failed (error): $ssh->error") and return 0 if $ssh->error;
+	logger(2,"SSH connection failed (error): ".$ssh->error) and return 0 if $ssh->error;
 	$ssh->auth_publickey($Conf->{'upload'}->{user},$Conf->{'upload'}->{sshkeypath}.'.pub',$Conf->{'upload'}->{sshkeypath});
-	logger(2,"SSH connection failed (auth error): $ssh->error") and return 0 unless $ssh->auth_ok;
+	logger(2,"SSH connection failed (auth error): ".$ssh->error) and return 0 unless $ssh->auth_ok;
 	$Conf->{'upload'}->{remotepath} .= "/" unless $Conf->{'upload'}->{remotepath} =~ /\/$/;
-	logger(2,"File upload failed: $ssh->error") and return 0 unless $ssh->scp_put("$file",$Conf->{'upload'}->{remotepath}.$file->basename);
+	logger(2,"File upload failed: ".$ssh->error) and return 0 unless $ssh->scp_put("$file",$Conf->{'upload'}->{remotepath}.$file->basename);
 	$ssh->disconnect; return 1;
 }
 sub timefmt2str {
@@ -111,7 +111,7 @@ sub init {
 	#at this point the config file should be /pretty/ kawaii, so we start initialising
 	my $pid = Unix::PID->new()->is_pidfile_running($Conf->{general}->{pidfile}) || 0;
 	kill 'HUP', $pid and logger(8, "$ME already running, restarting.") if $pid != $$ and $pid > 0;
-	Unix::PID->new()->pid_file($Conf->{general}->{pidfile}) or logger(9, "Failed to write PID to $Conf->{general}->{pidfile}");
+	Unix::PID->new()->pid_file($Conf->{general}->{pidfile}) or logger(9, "Failed to write PID to ".$Conf->{general}->{pidfile});
 	#indicate we should start
 	logger(1,"Starting $ME..");
 	$running = 1;
@@ -129,7 +129,7 @@ sub init_conf {
 	$base = $Conf->{general}->{home} if defined $Conf->{general}->{home} and length $Conf->{general}->{home};
 	return -3 unless defined $Conf->{general}->{tmp} and length $Conf->{general}->{tmp};
 	$Conf->{general}->{tmp} .= '/' unless $Conf->{general}->{tmp} =~ /\/$/;
-	mkdir $Conf->{general}->{tmp} or logger(9,"Error creating work directory $Conf->{general}->{tmp}: $!") unless -d $Conf->{general}->{tmp};
+	mkdir $Conf->{general}->{tmp} or logger(9,"Error creating work directory ".$Conf->{general}->{tmp}.": $!") unless -d $Conf->{general}->{tmp};
 	$Conf->{general}->{storelogs} = 1 unless defined $Conf->{general}->{storelogs} and $Conf->{general}->{storelogs} =~ /^[01]$/;
 	$Conf->{general}->{pidfile} = "$base/.$ME.pid" unless exists $Conf->{general}->{pidfile};
 	$Conf->{general}->{logfile} = "$base/.$ME.log" unless exists $Conf->{general}->{logfile};
@@ -187,7 +187,7 @@ sub trigger {
 	logger(1,"sender: $sender_mon, file: $file");
 	$file->move_to($Conf->{general}->{tmp}.name($sender_mon,$file->basename));
 	upload($file) or $file->move_to($Conf->{general}->{tmp}.$file->basename) and return if defined $Conf->{monitor}->{$sender_mon}->{action}->{'upload'} and $Conf->{monitor}->{$sender_mon}->{action}->{'upload'} == 1;
-	$file->move_to("$Conf->{monitor}->{$sender_mon}->{action}->{target}/".$file->basename) or logger(2,"Couldn't move ".$file->basename." to $Conf->{monitor}->{$sender_mon}->{action}->{target}") if defined $Conf->{monitor}->{$sender_mon}->{action}->{move} and $Conf->{monitor}->{$sender_mon}->{action}->{move} == 1 and defined $Conf->{monitor}->{$sender_mon}->{action}->{target};
+	$file->move_to($Conf->{monitor}->{$sender_mon}->{action}->{target}."/".$file->basename) or logger(2,"Couldn't move ".$file->basename." to ".$Conf->{monitor}->{$sender_mon}->{action}->{target}) if defined $Conf->{monitor}->{$sender_mon}->{action}->{move} and $Conf->{monitor}->{$sender_mon}->{action}->{move} == 1 and defined $Conf->{monitor}->{$sender_mon}->{action}->{target};
 	$file->remove() if defined $Conf->{monitor}->{$sender_mon}->{action}->{delete} and $Conf->{monitor}->{$sender_mon}->{action}->{delete} == 1;
 }
 sub notify {
