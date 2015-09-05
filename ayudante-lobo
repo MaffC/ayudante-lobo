@@ -53,7 +53,7 @@ sub timefmt2str {
 	return Date::Format::time2str(shift,time());
 }
 sub clipb_copy {
-my $t = shift;
+	my $t = shift;
 	Clipboard->copy($t) and return unless $^O eq 'darwin' or $^O eq 'MSWin32';
 	Win32::Clipboard::Empty() and Win32::Clipboard::Set($t) and return unless $^O eq 'darwin';
 	my $p = Mac::Pasteboard->new();
@@ -93,8 +93,10 @@ sub speak_w32 {
 }
 
 sub speak {
-	speak_osx(@_) if $^O eq 'darwin';
-	speak_w32(@_) if $^O eq 'MSWin32';
+	for ($^O) {
+		speak_osx(@_) if /darwin/;
+		speak_w32(@_) if /MSWin32/;
+	}
 	#TODO festival support on *nix
 }
 
@@ -229,5 +231,5 @@ sub upload {
 init();
 POE::Kernel->run_while(\$running);
 logger($sighup? 1 : 8,"Halting $ME..");
-#TODO figure out why SIGHUP on windows doesn't actually let lobo restart.
+#TODO investigate a way to signal lobo to restart on windows, since SIGHUP isn't supported
 exec $^X, $0, @ARGV;
