@@ -11,16 +11,18 @@ use Net::SSH2; use Try::Tiny;
 use POE; use POE::Component::DirWatch::WithCaller;
 use Unix::PID; use YAML;
 
-if($^O eq 'darwin') {
-	#Needed because Clipboard's use of Mac::Pasteboard is incomplete.
-	require Mac::Pasteboard;
-} else {
-	require Clipboard;
-	#Mac::Speech does not build on modern OSX installations, so we can't use Speech::Synthesis on darwin
-	#We still use Speech::Synthesis as a wrapper for Win32::SAPI5 because the interface is simpler
-	require Speech::Synthesis;
+#Load platform-specific modules here too to avoid missing modules causing a crash later
+for ($^O) {
+	#Clipboard.pm doesn't integrate nicely with the OSX clipboard due to datatype differences
+	#nor does it integrate well with windows, as it doesn't support empty()
+	require Mac::Pasteboard if /darwin/;
+	require Win32::Clipboard if /MSWin32/;
+	#Unsurprisingly it's perfectly fine for linux :/
+	require Clipboard unless /darwin/ or /MSWin32/;
+	#Speech::Synthesis is a great wrapper for Win32::SAPI5 and should work for Festival
+	#It unfortunately doesn't work -at all- on modern OSX due to API changes/Carbon deprecation
+	require Speech::Synthesis unless /darwin/;
 }
-
 
 my $ME = __PACKAGE__;
 #will bump to v1.0 upon full cross-platform compatibility and submission to CPAN.
@@ -51,8 +53,9 @@ sub timefmt2str {
 	return Date::Format::time2str(shift,time());
 }
 sub clipb_copy {
-	my $t = shift;
-	Clipboard->copy($t) and return unless $^O eq 'darwin'; #OSX is a special snowflake here
+my $t = shift;
+	Clipboard->copy($t) and return unless $^O eq 'darwin' or $^O eq 'MSWin32';
+	Win32::Clipboard::Empty() and Win32::Clipboard::Set($t) and return unless $^O eq 'darwin';
 	my $p = Mac::Pasteboard->new();
 	$p->clear(); #Clear clipboard first to avoid a clipboard ownership error
 	$p->copy($t);
@@ -193,7 +196,7 @@ sub filter {
 }
 sub trigger {
 	my ($sender_mon,$file) = @_;
-	logger(1,"sender: $sender_mon, file: $file");
+	#logger(1,"sender: $sender_mon, file: $file");
 	$file->move_to($Conf->{general}->{tmp}.name($sender_mon,$file->basename));
 	upload($file) or $file->move_to($Conf->{general}->{tmp}.$file->basename) and return if defined $Conf->{monitor}->{$sender_mon}->{action}->{'upload'} and $Conf->{monitor}->{$sender_mon}->{action}->{'upload'} == 1;
 	$file->move_to($Conf->{monitor}->{$sender_mon}->{action}->{target}."/".$file->basename) or logger(2,"Couldn't move ".$file->basename." to ".$Conf->{monitor}->{$sender_mon}->{action}->{target}) if defined $Conf->{monitor}->{$sender_mon}->{action}->{move} and $Conf->{monitor}->{$sender_mon}->{action}->{move} == 1 and defined $Conf->{monitor}->{$sender_mon}->{action}->{target};
