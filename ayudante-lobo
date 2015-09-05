@@ -40,9 +40,9 @@ sub scp_upload {
 	} catch {
 		logger(2,"SSH connection failed (exception): $_") and return 0;
 	};
-	logger(2,"SSH connection failed (error): ".$ssh->error) and return 0 if $ssh->error;
+	logger(2,"SSH connection failed (error): ".$ssh->error()) and return 0 if $ssh->error;
 	$ssh->auth_publickey($Conf->{'upload'}->{user},$Conf->{'upload'}->{sshkeypath}.'.pub',$Conf->{'upload'}->{sshkeypath});
-	logger(2,"SSH connection failed (auth error): ".$ssh->error) and return 0 unless $ssh->auth_ok;
+	logger(2,"SSH connection failed (auth error): ".$ssh->error()) and return 0 unless $ssh->auth_ok;
 	$Conf->{'upload'}->{remotepath} .= "/" unless $Conf->{'upload'}->{remotepath} =~ /\/$/;
 	logger(2,"File upload failed: ".$ssh->error) and return 0 unless $ssh->scp_put("$file",$Conf->{'upload'}->{remotepath}.$file->basename);
 	$ssh->disconnect; return 1;
