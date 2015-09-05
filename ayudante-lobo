@@ -9,16 +9,20 @@ use Net::SSH2; use Try::Tiny;
 use POE; use POE::Component::DirWatch::WithCaller;
 use Unix::PID; use YAML;
 
-#thank you cpan-senpai
-use Speech::Synthesis;
+if($^O eq 'darwin') {
+	#Needed because Clipboard's use of Mac::Pasteboard is subpar.
+	require Mac::Pasteboard;
+} else {
+	require Clipboard;
+	#Mac::Speech does not build on modern OSX installations, so we can't use Speech::Synthesis on darwin
+	require Speech::Synthesis;
+}
 
-require Win32::Clipboard if $^O eq 'MSWin32';
-require Mac::Pasteboard if $^O eq 'darwin';
 
-
-my $ME = "ayudante-lobo";
-#will bump to 1.0 once i'm satisfied with notif banner methods & xplat compat
-my $VERSION = "0.10";
+my $ME = __PACKAGE__;
+#will bump to v1.0 upon full cross-platform compatibility and submission to CPAN.
+#version number reflective of how close the module is to 'complete'
+my $VERSION = "0.7";
 my $HOSTNAME = `hostname`; chomp $HOSTNAME;
 
 my ($base, $Conf);
@@ -43,59 +47,60 @@ sub scp_upload {
 sub timefmt2str {
 	return Date::Format::time2str(shift,time());
 }
-sub clipb_copy_w32 {
+sub clipb_copy {
 	my $t = shift;
-	Win32::Clipboard::Empty();
-	Win32::Clipboard::Set($t);
-}
-sub clipb_copy_osx {
-	my $t = shift;
+	Clipboard->copy($t) and return unless $^O eq 'darwin';
 	my $p = Mac::Pasteboard->new();
+	$p->clear();
 	$p->copy($t);
 	$p->copy($t, "public.utf8-plain-text");
 	$p->copy($t, "public.utf16-plain-text");
 	$p->copy($t, "public.utf16-external-plain-text");
 }
-sub clipb_copy {
-	clipb_copy_w32(@_) if $^O eq 'MSWin32';
-	clipb_copy_osx(@_) if $^O eq 'darwin';
-}
-sub banner_w32 {
-	my ($title,$text) = @_;
-	#TODO either figure out how to do toasts without a shim, or make this less ghetto
-	system("C:/Users/Maff/Documents/Other/toast.exe \"$title\" \"$text\" \"\"");
-}
-sub banner_osx {
-	my ($title,$text) = @_;
-	#TODO ditto as above, osascript isn't a shim per-se but it's still ghetto
-	system("/usr/bin/osascript -e 'display notification \"$text\" with title \"$title\"' &");
-}
 sub banner {
-	banner_w32(@_) if $^O eq 'MSWin32';
-	banner_osx(@_) if $^O eq 'darwin';
+	#TODO make these less ghetto.
+	my ($title,$text) = @_;
+	system($Conf->{general}->{'notify'}->{toast_exe}." \"$title\" \"$text\" \"\"") if $^O eq 'MSWin32';
+	system("/usr/bin/osascript -e 'display notification \"$text\" with title \"$title\"' &") if $^O eq 'darwin';
+	#TODO some form of notification banner on *nix
 }
-sub speak {
+sub speak_osx {
+	my ($r,$v);
+	my $t=shift;
+	#We have to use `say` here because Mac::Speech is old and busted.
+	$v = "-v".$Conf->{general}->{'notify'}->{speech_voice} if length $Conf->{general}->{'notify'}->{speech_voice};
+	$r = "-r".$Conf->{general}->{'notify'}->{speech_rate} if length $Conf->{general}->{'notify'}->{speech_rate};
+	system("/usr/bin/say $v $r '$t' &");
+}
+sub speak_w32 {
 	my $t=shift;
 	my %args=(
-		engine	=> '',
+		engine	=> 'SAPI5',
 		voice		=> ''
 	);
-	$args{engine}='SAPI5' if $^O eq 'MSWin32';
-	$args{engine}='MacSpeech' if $^O eq 'darwin';
 	$args{voice}=$Conf->{general}->{'notify'}->{speech_voice} if length $Conf->{general}->{'notify'}->{speech_voice};
 	my $synth=Speech::Synthesis->new(%args);
 	$synth->speak($t);
 }
 
+sub speak {
+	speak_osx(@_) if $^O eq 'darwin';
+	speak_w32(@_) if $^O eq 'MSWin32';
+	#TODO festival support on *nix
+}
+
 # Functions
 sub init {
 	#if $HOME ('nix) or $HOMEDRIVE/$HOMEPATH (win32) exist, use those for our basedir, else use cwd
-	$base = $ENV{HOME} || cwd();
-	$base = $ENV{HOMEDRIVE}.$ENV{HOMEPATH} if $^O eq 'MSWin32';
-	$base =~ s/\\/\//g if $^O eq 'MSWin32';
+	$base = $ENV{HOME};
+	if($^O eq 'MSWin32') {
+		$base = $ENV{HOMEDRIVE}.$ENV{HOMEPATH};
+		$base =~ s/\\/\//g;
+	}
+	$base = cwd() unless length $base and -d $base;
 	#chdir to avoid fucking up relative paths when launched outside of $base
 	chdir $base;
-	my $confp = $ENV{LOBORC} || "$base/.${ME}rc"; my $loaded = 0;
+	my $confp = $ENV{LOBORC} || "$base/.ayudante-loborc"; my $loaded = 0;
 	$loaded = init_conf($confp) if -e $confp and -f $confp and -r $confp and not -z $confp;
 	if ($Conf->{general}->{storelogs} or not $loaded) {
 		open(STDOUT, ">>".$Conf->{general}->{logfile}) if length $Conf->{general}->{logfile};
@@ -127,6 +132,7 @@ sub init {
 sub init_conf {
 	$Conf = YAML::LoadFile(shift) or return -1;
 	$base = $Conf->{general}->{home} if defined $Conf->{general}->{home} and length $Conf->{general}->{home};
+	chdir $base;
 	return -3 unless defined $Conf->{general}->{tmp} and length $Conf->{general}->{tmp};
 	$Conf->{general}->{tmp} .= '/' unless $Conf->{general}->{tmp} =~ /\/$/;
 	mkdir $Conf->{general}->{tmp} or logger(9,"Error creating work directory ".$Conf->{general}->{tmp}.": $!") unless -d $Conf->{general}->{tmp};
