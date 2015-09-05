@@ -10,11 +10,12 @@ use POE; use POE::Component::DirWatch::WithCaller;
 use Unix::PID; use YAML;
 
 if($^O eq 'darwin') {
-	#Needed because Clipboard's use of Mac::Pasteboard is subpar.
+	#Needed because Clipboard's use of Mac::Pasteboard is incomplete.
 	require Mac::Pasteboard;
 } else {
 	require Clipboard;
 	#Mac::Speech does not build on modern OSX installations, so we can't use Speech::Synthesis on darwin
+	#We still use Speech::Synthesis as a wrapper for Win32::SAPI5 because the interface is simpler
 	require Speech::Synthesis;
 }
 
@@ -49,9 +50,9 @@ sub timefmt2str {
 }
 sub clipb_copy {
 	my $t = shift;
-	Clipboard->copy($t) and return unless $^O eq 'darwin';
+	Clipboard->copy($t) and return unless $^O eq 'darwin'; #OSX is a special snowflake here
 	my $p = Mac::Pasteboard->new();
-	$p->clear();
+	$p->clear(); #Clear clipboard first to avoid a clipboard ownership error
 	$p->copy($t);
 	$p->copy($t, "public.utf8-plain-text");
 	$p->copy($t, "public.utf16-plain-text");
@@ -59,6 +60,8 @@ sub clipb_copy {
 }
 sub banner {
 	#TODO make these less ghetto.
+	#There might be something in Win32::OLE I can use for toast notifications.
+	#Mac::Carbon probably provides something too, but it's too old to use on modern OSX.
 	my ($title,$text) = @_;
 	system($Conf->{general}->{'notify'}->{toast_exe}." \"$title\" \"$text\" \"\"") if $^O eq 'MSWin32';
 	system("/usr/bin/osascript -e 'display notification \"$text\" with title \"$title\"' &") if $^O eq 'darwin';
@@ -73,6 +76,7 @@ sub speak_osx {
 	system("/usr/bin/say $v $r '$t' &");
 }
 sub speak_w32 {
+	#TODO genericise this sub, set engine to sapi5/festival based on platform
 	my $t=shift;
 	my %args=(
 		engine	=> 'SAPI5',
@@ -98,7 +102,7 @@ sub init {
 		$base =~ s/\\/\//g;
 	}
 	$base = cwd() unless length $base and -d $base;
-	#chdir to avoid fucking up relative paths when launched outside of $base
+	#chdir to ensure relative paths work as expected for the user
 	chdir $base;
 	my $confp = $ENV{LOBORC} || "$base/.ayudante-loborc"; my $loaded = 0;
 	$loaded = init_conf($confp) if -e $confp and -f $confp and -r $confp and not -z $confp;
@@ -107,11 +111,11 @@ sub init {
 		open(STDERR, ">>".$Conf->{general}->{errlogfile}) if length $Conf->{general}->{errlogfile};
 		select((select(STDOUT), $|=1)[0]);
 	}
-	$loaded == 0 and logger(9,"Configuration file at $confp either doesn't exist or is unreadable/empty.");
+	$loaded ==  0 and logger(9,"Configuration file at $confp either doesn't exist or is unreadable/empty.");
 	$loaded == -1 and logger(9,"Configuration file at $confp exists but could not be loaded. Please check it is fully-valid YAML.");
 	$loaded == -2 and logger(9,"Configuration file at $confp loaded but did not contain any enabled monitors.");
 	$loaded == -3 and logger(9,"Configuration file at $confp loaded but was missing a required configuration parameter.");
-	#then we run the kernel once, I forget why
+	#then we run the kernel once, I forget why but I remember it being a problem
 	POE::Kernel->run();
 	#at this point the config file should be /pretty/ kawaii, so we start initialising
 	my $pid = Unix::PID->new()->is_pidfile_running($Conf->{general}->{pidfile}) || 0;
@@ -121,10 +125,7 @@ sub init {
 	logger(1,"Starting $ME..");
 	$running = 1;
 	#set up signal handlers so we can handle SIGHUPs and handle quitting gracefully.
-	$SIG{HUP} = \&sigtrap;
-	$SIG{INT} = \&sigtrap;
-	$SIG{QUIT} = \&sigtrap;
-	$SIG{TERM} = \&sigtrap;
+	$SIG{$_} = \&sigtrap for qw/HUP INT QUIT TERM/;
 	#then we initialise monitors
 	init_mons();
 	logger(1, "$ME version $VERSION started.");
@@ -153,11 +154,11 @@ sub init_mons {
 			$Conf->{monitor}->{$monitor}->{poll} = 5 unless defined $Conf->{monitor}->{$monitor}->{poll};
 			$Conf->{monitor}->{$monitor}->{ignoreseen} = 0 unless defined $Conf->{monitor}->{$monitor}->{ignoreseen};
 			$_[HEAP]->{$monitor} = POE::Component::DirWatch::WithCaller->new(
-				alias			=> $monitor,
-				directory		=> $Conf->{monitor}->{$monitor}->{dir},
-				filter			=> \&filter,
+				alias					=> $monitor,
+				directory			=> $Conf->{monitor}->{$monitor}->{dir},
+				filter				=> \&filter,
 				file_callback	=> \&trigger,
-				interval		=> $Conf->{monitor}->{$monitor}->{poll},
+				interval			=> $Conf->{monitor}->{$monitor}->{poll},
 				ignore_seen		=> $Conf->{monitor}->{$monitor}->{ignoreseen},
 				ensure_seen		=> $Conf->{monitor}->{$monitor}->{ignoreseen},
 			);
