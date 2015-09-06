@@ -1,4 +1,4 @@
-pp -B -c -S -z 9 ^
+pp -B -c -g -S -z 9 ^
 -cd ayudante-lobo.pp-deps ^
 -o ayudante-lobo.exe ^
 -M Cwd ^
