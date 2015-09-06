@@ -22,6 +22,8 @@ for ($^O) {
 	#Speech::Synthesis is a great wrapper for Win32::SAPI5 and should work for Festival
 	#It unfortunately doesn't work -at all- on modern OSX due to API changes/Carbon deprecation
 	require Speech::Synthesis unless /darwin/;
+	#Win32::API needed here for moderately pleasant use of SnoreNotify
+	require Win32::API if /MSWin32/;
 }
 
 my $ME = __PACKAGE__;
@@ -68,7 +70,7 @@ sub banner {
 	#There might be something in Win32::OLE I can use for toast notifications.
 	#Mac::Carbon probably provides something too, but it's too old to use on modern OSX.
 	my ($title,$text) = @_;
-	system($Conf->{general}->{'notify'}->{toast_exe}." \"$title\" \"$text\" \"\"") if $^O eq 'MSWin32';
+	system($Conf->{general}->{'notify'}->{toast_exe}." -appID MaffC.App-AyudanteLobo -silent -t \"$title\" -m \"$text\"") if $^O eq 'MSWin32';
 	system("/usr/bin/osascript -e 'display notification \"$text\" with title \"$title\"' &") if $^O eq 'darwin';
 	#TODO some form of notification banner on *nix
 }
@@ -131,6 +133,17 @@ sub init {
 	#indicate we should start
 	logger(1,"Starting $ME..");
 	$running = 1;
+	#set up AppUserModelID for windows' toast notifications
+	if (defined $Conf->{general}->{'notify'}->{'banner'} and $Conf->{general}->{'notify'}->{'banner'} and length $Conf->{general}->{'notify'}->{toast_exe}) {
+		my $SetProcessAppID = Win32::API::More->new('shell32', 'SetCurrentProcessExplicitAppUserModelID', 'N', 'n');
+		logger(9,"Error while loading Shell32:SetCurrentProcessExplicitAppUserModelID via Win32::API: $^E") unless $SetProcessAppID;
+		#$SetProcessAppID->UseMI64(1); #Commented out because perl complains that no such subroutine exists
+		my $ret = $SetProcessAppID->Call(unpack('J',pack('p',"MaffC.App-AyudanteLobo")));
+		logger(9,"Error while calling Shell32:SetCurrentProcessExplicitAppUserModelID: $^E") unless $ret == 0;
+		#Windows requires a shortcut exist in order for notifications from an AppID to actually succeed, so we create one where the user won't see it.
+		#This is done upon startup, with no care for if a shortcut already exists. It'll either fail to create, which is fine, or overwrite, which is also fine.
+		system($Conf->{general}->{'notify'}->{toast_exe}." -install \"Maintenance\\ayudante-lobo-notifier-shim\" $^X MaffC.App-AyudanteLobo");
+	}
 	#set up signal handlers so we can handle SIGHUPs and handle quitting gracefully.
 	$SIG{$_} = \&sigtrap for qw/HUP INT QUIT TERM/;
 	#then we initialise monitors
