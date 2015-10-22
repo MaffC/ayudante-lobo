@@ -142,7 +142,7 @@ sub init {
 		logger(9,"Error while calling Shell32:SetCurrentProcessExplicitAppUserModelID: $^E") unless $ret == 0;
 		#Windows requires a shortcut exist in order for notifications from an AppID to actually succeed, so we create one where the user won't see it.
 		#This is done upon startup, with no care for if a shortcut already exists. It'll either fail to create, which is fine, or overwrite, which is also fine.
-		system($Conf->{general}->{'notify'}->{toast_exe}." -install \"Maintenance\\ayudante-lobo-notifier-shim\" $^X MaffC.App-AyudanteLobo");
+		system($Conf->{general}->{'notify'}->{toast_exe}." -install \"Startup\\ayudante-lobo\" $ENV{PAR_PROGNAME} MaffC.App-AyudanteLobo");
 	}
 	#set up signal handlers so we can handle SIGHUPs and handle quitting gracefully.
 	$SIG{$_} = \&sigtrap for qw/HUP INT QUIT TERM/;

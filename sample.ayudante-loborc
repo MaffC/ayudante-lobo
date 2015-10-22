@@ -43,10 +43,10 @@ monitor:
       delete: 1
 
 # general configuration, basically self-documenting
-# general->home is optional. if empty, this will be determined by the $HOME env variable or the current working directory.
+# general->home is optional. if empty, this will be determined by the $HOME env variable(s) or the current working directory.
 # general->errlogfile and logfile will default to $home/.ayudante-lobo.err and .log if removed, leaving them blank will instead disable logging for either standard logs or error logs. if both are left blank, storelogs will internally be set to 0 at runtime.
 # general->tmp is required.
-# general->notify->toast_exe is an optional directive pointing to the program to be used to display notification toasts in windows. required if running windows and general->notify->banner is turned on.
+# general->notify->toast_exe is required if running windows and general->notify->banner is turned on. this directive should point to the location of SnoreToastGUI.exe from the latest release of SnoreToast: https://github.com/Snorenotify/Snoretoast/releases
 # general->notify->speech_rate only applies to speech on OSX.
 general:
   home:
